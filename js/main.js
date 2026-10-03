@@ -5,16 +5,22 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { CONFIG } from './config.js';
 import { Joystick } from './joystick.js';
+import { loadLevel, collide } from './level.js';
 
 const DEG = Math.PI / 180;
 const R = CONFIG.robot;
-const L = CONFIG.level;
+const C = CONFIG.camera;
 const COL = CONFIG.colors;
-const DEBUG = new URLSearchParams(location.search).has('debug');
+const params = new URLSearchParams(location.search);
+const DEBUG = params.has('debug');
 
 const $ = (id) => document.getElementById(id);
 const stage = $('stage');
 const canvas = $('game');
+
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+const damp = (rate, dt) => 1 - Math.exp(-rate * dt);
 
 // ---------------------------------------------------------------------------
 // Renderer, scene, lights
@@ -35,218 +41,146 @@ scene.environmentIntensity = 0.3;
 
 scene.add(new THREE.HemisphereLight(0xffffff, 0x6f9c90, 0.8));
 
+const camera = new THREE.PerspectiveCamera(C.fov, CONFIG.stageAspect, 0.1, 200);
+
+// The camera keeps a fixed three-quarter angle and follows the robot.
+// `view` is how far the screen reaches across the floor from the look-at point.
+const camEl = C.elevation * DEG;
+const halfFov = (C.fov / 2) * DEG;
+const camDir = new THREE.Vector3(0, Math.sin(camEl), Math.cos(camEl));
+const view = {
+  halfX: C.distance * Math.tan(halfFov) * CONFIG.stageAspect,
+  far: (C.distance * Math.sin(halfFov)) / Math.sin(camEl - halfFov),   // toward the top of the screen
+  near: (C.distance * Math.sin(halfFov)) / Math.sin(camEl + halfFov),  // toward the bottom
+};
+
+// The sun's shadow area covers what the camera sees and moves along with it.
+const sunOffset = new THREE.Vector3(-6, 14, 7);
 const sun = new THREE.DirectionalLight(0xfff3e0, 2.3);
-sun.position.set(-6, 14, 7);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
-const shadowHalf = Math.max(L.width, L.depth) * 0.72;
-Object.assign(sun.shadow.camera, { left: -shadowHalf, right: shadowHalf, top: shadowHalf, bottom: -shadowHalf, near: 1, far: 45 });
+const farHalfX = (C.distance + view.far * Math.cos(camEl)) * Math.tan(halfFov) * CONFIG.stageAspect;
+const shadowHalf = Math.max(farHalfX, (view.far + view.near) / 2) + 1.5;
+Object.assign(sun.shadow.camera, { left: -shadowHalf, right: shadowHalf, top: shadowHalf, bottom: -shadowHalf, near: 1, far: 60 });
 sun.shadow.bias = -0.0004;
 sun.shadow.normalBias = 0.02;
 scene.add(sun, sun.target);
+const sunRot = new THREE.Matrix4().lookAt(sunOffset, new THREE.Vector3(), new THREE.Vector3(0, 1, 0));
+const sunRotInv = sunRot.clone().invert();
 
-const camera = new THREE.PerspectiveCamera(CONFIG.camera.fov, CONFIG.stageAspect, 0.1, 200);
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
+
+let toastTimer;
+function showToast(text, ms = 4500) {
+  const el = $('toast');
+  el.textContent = text;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, ms);
+}
+
+// ---------------------------------------------------------------------------
+// Input
+// ---------------------------------------------------------------------------
+
+const joystick = new Joystick($('stick-zone'), $('stick-base'), $('stick-knob'));
+
+// Keyboard for testing on a desktop: WASD or arrow keys.
+const keys = new Set();
+const KEYMAP = { KeyW: 'up', ArrowUp: 'up', KeyS: 'down', ArrowDown: 'down', KeyA: 'left', ArrowLeft: 'left', KeyD: 'right', ArrowRight: 'right' };
+addEventListener('keydown', (e) => { if (KEYMAP[e.code]) { keys.add(KEYMAP[e.code]); e.preventDefault(); } });
+addEventListener('keyup', (e) => keys.delete(KEYMAP[e.code]));
+addEventListener('blur', () => keys.clear());
+
+function readInput() {
+  const kx = (keys.has('right') ? 1 : 0) - (keys.has('left') ? 1 : 0);
+  const ky = (keys.has('down') ? 1 : 0) - (keys.has('up') ? 1 : 0);
+  if (kx || ky) {
+    const l = Math.hypot(kx, ky);
+    return { x: kx / l, y: ky / l };
+  }
+  return { x: joystick.x, y: joystick.y };
+}
+
+// ---------------------------------------------------------------------------
+// Layout, fullscreen
+// ---------------------------------------------------------------------------
+
+function layout() {
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  let w = W;
+  let h = W / CONFIG.stageAspect;
+  if (h > H) {
+    h = H;
+    w = H * CONFIG.stageAspect;
+  }
+  w = Math.floor(w);
+  h = Math.floor(h);
+  stage.style.width = `${w}px`;
+  stage.style.height = `${h}px`;
+  renderer.setSize(w, h, false);
+  joystick.rest();
+}
+addEventListener('resize', layout);
+document.addEventListener('fullscreenchange', layout);
+layout();
+
+const fsBtn = $('fullscreen');
+const standalone = matchMedia('(display-mode: fullscreen), (display-mode: standalone)').matches;
+if (!document.fullscreenEnabled || standalone) fsBtn.hidden = true;
+fsBtn.addEventListener('click', async () => {
+  try {
+    if (!document.fullscreenElement) {
+      await document.documentElement.requestFullscreen({ navigationUI: 'hide' });
+      try { await screen.orientation.lock('landscape'); } catch { /* not supported everywhere */ }
+    } else {
+      await document.exitFullscreen();
+    }
+  } catch (err) {
+    console.warn('Fullscreen failed:', err);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Level
 // ---------------------------------------------------------------------------
 
-const halfW = L.width / 2;
-const halfD = L.depth / 2;
-const wallT = L.wallThickness;
-const colliders = []; // axis-aligned boxes on the floor: { minX, maxX, minZ, maxZ }
+const loadingEl = $('loading');
+const gltfLoader = new GLTFLoader();
+const draco = new DRACOLoader();
+draco.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
+gltfLoader.setDRACOLoader(draco);
 
-const levelVisuals = new THREE.Group(); // hidden when a painted background is used
-scene.add(levelVisuals);
-
-function playmatTexture() {
-  const size = 128;
-  const c = document.createElement('canvas');
-  c.width = c.height = size;
-  const g = c.getContext('2d');
-  g.fillStyle = `#${COL.floorLine.toString(16).padStart(6, '0')}`;
-  g.fillRect(0, 0, size, size);
-  g.fillStyle = `#${COL.floor.toString(16).padStart(6, '0')}`;
-  g.beginPath();
-  g.roundRect(4, 4, size - 8, size - 8, 14);
-  g.fill();
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(L.width / 2, L.depth / 2);
-  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-  return tex;
+let level;
+try {
+  level = await loadLevel(params.get('level') || CONFIG.startLevel, gltfLoader, renderer.capabilities.getMaxAnisotropy());
+} catch (err) {
+  loadingEl.classList.add('done');
+  showToast(`Couldn't load the level: ${err.message}`, 20000);
+  throw err;
 }
-
-function buildLevel() {
-  const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(L.width, L.depth),
-    new THREE.MeshStandardMaterial({ map: playmatTexture(), roughness: 0.9 })
-  );
-  floor.rotation.x = -Math.PI / 2;
-  floor.receiveShadow = true;
-  levelVisuals.add(floor);
-
-  const base = new THREE.Mesh(
-    new RoundedBoxGeometry(L.width + wallT * 2 + 0.4, 0.8, L.depth + wallT * 2 + 0.4, 3, 0.15),
-    new THREE.MeshStandardMaterial({ color: COL.base, roughness: 0.7 })
-  );
-  base.position.y = -0.42;
-  base.receiveShadow = true;
-  levelVisuals.add(base);
-
-  // Walls: tall at the back and sides, low at the front so they never block the view.
-  const wallMat = new THREE.MeshStandardMaterial({ color: COL.wall, roughness: 0.6 });
-  const fullW = L.width + wallT * 2;
-  const walls = [
-    { x: 0, z: -halfD - wallT / 2, w: fullW, d: wallT, h: L.wallHeight },
-    { x: 0, z: halfD + wallT / 2, w: fullW, d: wallT, h: 0.3 },
-    { x: -halfW - wallT / 2, z: 0, w: wallT, d: L.depth, h: L.wallHeight },
-    { x: halfW + wallT / 2, z: 0, w: wallT, d: L.depth, h: L.wallHeight },
-  ];
-  for (const w of walls) {
-    const m = new THREE.Mesh(new RoundedBoxGeometry(w.w, w.h, w.d, 2, Math.min(0.12, w.h / 3)), wallMat);
-    m.position.set(w.x, w.h / 2, w.z);
-    m.castShadow = m.receiveShadow = true;
-    levelVisuals.add(m);
-  }
-
-  for (const c of L.crates) {
-    const m = new THREE.Mesh(
-      new RoundedBoxGeometry(c.w, c.h, c.d, 3, 0.1),
-      new THREE.MeshStandardMaterial({ color: COL[c.color] ?? COL.orange, roughness: 0.55 })
-    );
-    m.position.set(c.x, c.h / 2, c.z);
-    m.castShadow = m.receiveShadow = true;
-    levelVisuals.add(m);
-    addCollider(c.x, c.z, c.w, c.d, c.h);
-  }
-
-  for (const b of L.blockers) addCollider(b.x, b.z, b.w, b.d, b.h ?? 1);
-}
-
-function addCollider(x, z, w, d, h = 1) {
-  colliders.push({ minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2 });
-  if (DEBUG) {
-    const helper = new THREE.Mesh(
-      new THREE.BoxGeometry(w, h, d),
-      new THREE.MeshBasicMaterial({ color: 0xff0055, wireframe: true })
-    );
-    helper.position.set(x, h / 2, z);
-    scene.add(helper);
-  }
-}
-
-// Only receives shadows: lets the robot cast a shadow onto a painted floor.
-const shadowCatcher = new THREE.Mesh(
-  new THREE.PlaneGeometry(L.width, L.depth),
-  new THREE.ShadowMaterial({ opacity: 0.25 })
-);
-shadowCatcher.rotation.x = -Math.PI / 2;
-shadowCatcher.position.y = 0.002;
-shadowCatcher.receiveShadow = true;
-shadowCatcher.visible = false;
-scene.add(shadowCatcher);
-
-buildLevel();
+scene.add(level.visuals);
 
 if (DEBUG) {
-  const grid = new THREE.GridHelper(Math.max(L.width, L.depth), Math.max(L.width, L.depth), 0x22305c, 0x22305c);
-  grid.position.y = 0.01;
+  for (const c of level.colliders) {
+    const helper = new THREE.Mesh(
+      new THREE.BoxGeometry(c.hw * 2, c.h, c.hd * 2),
+      new THREE.MeshBasicMaterial({ color: 0xff0055, wireframe: true })
+    );
+    helper.position.set(c.x, c.h / 2, c.z);
+    helper.rotation.y = c.rot;
+    scene.add(helper);
+  }
+  const gridSize = Math.ceil(Math.max(level.width, level.depth));
+  const grid = new THREE.GridHelper(gridSize, gridSize, 0x22305c, 0x22305c);
+  grid.position.set(level.centerX, 0.01, level.centerZ);
   grid.material.opacity = 0.35;
   grid.material.transparent = true;
   scene.add(grid);
 }
-
-// ---------------------------------------------------------------------------
-// Optional painted background + cut-out occluders
-// ---------------------------------------------------------------------------
-
-const texLoader = new THREE.TextureLoader();
-
-if (CONFIG.background.url) {
-  texLoader.load(
-    CONFIG.background.url,
-    (tex) => {
-      tex.colorSpace = THREE.SRGBColorSpace;
-      scene.background = tex;
-      if (CONFIG.background.hideBlocks) {
-        levelVisuals.visible = false;
-        shadowCatcher.visible = true;
-      }
-    },
-    undefined,
-    () => showToast(`Couldn't load the background image at ${CONFIG.background.url}. Check the path in js/config.js.`)
-  );
-}
-
-for (const o of CONFIG.occluders) {
-  texLoader.load(
-    o.url,
-    (tex) => {
-      tex.colorSpace = THREE.SRGBColorSpace;
-      // alphaTest (not blending) keeps the depth buffer correct, so the robot
-      // is cleanly hidden behind the opaque parts of the cut-out.
-      const m = new THREE.Mesh(
-        new THREE.PlaneGeometry(o.width, o.height),
-        new THREE.MeshBasicMaterial({ map: tex, alphaTest: 0.5, side: THREE.DoubleSide })
-      );
-      m.position.set(o.x, o.height / 2, o.z);
-      scene.add(m);
-    },
-    undefined,
-    () => showToast(`Couldn't load the cut-out at ${o.url}.`)
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Camera: fixed three-quarter view, distance chosen so the whole level fits
-// ---------------------------------------------------------------------------
-
-function fitCamera() {
-  const el = CONFIG.camera.elevation * DEG;
-  const dir = new THREE.Vector3(0, Math.sin(el), Math.cos(el));
-  const target = new THREE.Vector3(0, 0, 0);
-  const ex = halfW + wallT + 0.2;
-  const ez = halfD + wallT + 0.2;
-  const corners = [];
-  for (const x of [-ex, ex]) for (const z of [-ez, ez]) for (const y of [-0.85, L.wallHeight + 0.3]) {
-    corners.push(new THREE.Vector3(x, y, z));
-  }
-
-  const v = new THREE.Vector3();
-  const place = (d) => {
-    camera.position.copy(target).addScaledVector(dir, d);
-    camera.lookAt(target);
-    camera.updateMatrixWorld();
-  };
-  const fits = () => corners.every((p) => {
-    v.copy(p).project(camera);
-    return Math.abs(v.x) <= CONFIG.camera.margin && Math.abs(v.y) <= CONFIG.camera.margin;
-  });
-
-  let lo = 1, hi = 300;
-  for (let i = 0; i < 40; i++) {
-    const mid = (lo + hi) / 2;
-    place(mid);
-    if (fits()) hi = mid; else lo = mid;
-  }
-  place(hi);
-
-  // Perspective pushes the level off-centre vertically; shift the view to recentre it.
-  let minY = Infinity, maxY = -Infinity;
-  for (const p of corners) {
-    v.copy(p).project(camera);
-    minY = Math.min(minY, v.y);
-    maxY = Math.max(maxY, v.y);
-  }
-  const fullW = 1000, fullH = 1000 / CONFIG.stageAspect;
-  camera.setViewOffset(fullW, fullH, 0, -((minY + maxY) / 2) * fullH / 2, fullW, fullH);
-}
-
-camera.aspect = CONFIG.stageAspect;
-camera.updateProjectionMatrix();
-fitCamera();
 
 // ---------------------------------------------------------------------------
 // Robot: root (position + facing) > hover (bob) > lean (tilt) > holder > model
@@ -348,19 +282,48 @@ function makePlaceholderRobot() {
 installModel(makePlaceholderRobot());
 
 function resetRobot() {
-  robot.root.position.set(L.start.x, 0, L.start.z);
+  robot.root.position.set(level.spawn.x, 0, level.spawn.z);
   robot.vel.set(0, 0);
-  robot.yaw = robot.targetYaw = 0;
+  robot.yaw = robot.targetYaw = level.spawn.yaw * DEG;
+  robot.root.rotation.y = robot.yaw;
   robot.leanAngle = robot.leanVel = robot.bank = robot.prevFwd = robot.accel = 0;
+  updateCamera(0, true);
 }
+
+// ---------------------------------------------------------------------------
+// Camera: follows the robot, stops at the level edges
+// ---------------------------------------------------------------------------
+
+const camTarget = new THREE.Vector3();
+const sunCenter = new THREE.Vector3();
+// Clamp v to lo..hi; if the level is smaller than the view, centre it instead.
+const range = (lo, hi, v) => (lo > hi ? (lo + hi) / 2 : clamp(v, lo, hi));
+
+function updateCamera(dt, snap = false) {
+  const b = level.bounds;
+  const p = robot.root.position;
+  const gx = range(b.minX - C.edgePad + view.halfX, b.maxX + C.edgePad - view.halfX, p.x);
+  const gz = range(b.minZ - C.edgePad + view.far, b.maxZ + C.edgePad - view.near, p.z);
+  const k = snap ? 1 : damp(C.followSpeed, dt);
+  camTarget.x += (gx - camTarget.x) * k;
+  camTarget.z += (gz - camTarget.z) * k;
+  camera.position.copy(camTarget).addScaledVector(camDir, C.distance);
+  camera.lookAt(camTarget);
+
+  // Centre the shadow area on the visible floor, snapped to whole shadow
+  // texels so shadow edges don't shimmer while the camera moves.
+  const texel = (shadowHalf * 2) / sun.shadow.mapSize.x;
+  sunCenter.set(camTarget.x, 0, camTarget.z + (view.near - view.far) / 2).applyMatrix4(sunRotInv);
+  sunCenter.x = Math.round(sunCenter.x / texel) * texel;
+  sunCenter.y = Math.round(sunCenter.y / texel) * texel;
+  sunCenter.applyMatrix4(sunRot);
+  sun.target.position.copy(sunCenter);
+  sun.position.copy(sunCenter).add(sunOffset);
+}
+
 resetRobot();
 
 // Try the real model; keep the placeholder if it isn't there yet.
-const loadingEl = $('loading');
-const gltfLoader = new GLTFLoader();
-const draco = new DRACOLoader();
-draco.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
-gltfLoader.setDRACOLoader(draco);
 gltfLoader.load(
   R.modelUrl,
   (gltf) => {
@@ -385,12 +348,12 @@ const gemMat = new THREE.MeshStandardMaterial({
 });
 const burstGeo = new THREE.RingGeometry(0.5, 0.62, 40);
 
-const pickups = L.pickups.map(([x, z], i) => {
+const pickups = level.gems.map(({ x, z, y = 0 }, i) => {
   const mesh = new THREE.Mesh(gemGeo, gemMat);
   mesh.castShadow = true;
-  mesh.position.set(x, 0.95, z);
+  mesh.position.set(x, y + 0.95, z);
   scene.add(mesh);
-  return { mesh, x, z, phase: i * 0.8, taken: false };
+  return { mesh, x, z, baseY: y + 0.95, phase: i * 0.8, taken: false };
 });
 const effects = [];
 
@@ -444,75 +407,8 @@ $('again').addEventListener('click', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Input
-// ---------------------------------------------------------------------------
-
-const joystick = new Joystick($('stick-zone'), $('stick-base'), $('stick-knob'));
-
-// Keyboard for testing on a desktop: WASD or arrow keys.
-const keys = new Set();
-const KEYMAP = { KeyW: 'up', ArrowUp: 'up', KeyS: 'down', ArrowDown: 'down', KeyA: 'left', ArrowLeft: 'left', KeyD: 'right', ArrowRight: 'right' };
-addEventListener('keydown', (e) => { if (KEYMAP[e.code]) { keys.add(KEYMAP[e.code]); e.preventDefault(); } });
-addEventListener('keyup', (e) => keys.delete(KEYMAP[e.code]));
-addEventListener('blur', () => keys.clear());
-
-function readInput() {
-  const kx = (keys.has('right') ? 1 : 0) - (keys.has('left') ? 1 : 0);
-  const ky = (keys.has('down') ? 1 : 0) - (keys.has('up') ? 1 : 0);
-  if (kx || ky) {
-    const l = Math.hypot(kx, ky);
-    return { x: kx / l, y: ky / l };
-  }
-  return { x: joystick.x, y: joystick.y };
-}
-
-// ---------------------------------------------------------------------------
 // Movement & animation
 // ---------------------------------------------------------------------------
-
-const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
-const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
-const damp = (rate, dt) => 1 - Math.exp(-rate * dt);
-
-function collide(px, pz) {
-  const r = R.radius;
-  const v = robot.vel;
-  const pushOut = (nx, nz, pen) => {
-    px += nx * pen;
-    pz += nz * pen;
-    const vn = v.x * nx + v.y * nz;
-    if (vn < 0) { v.x -= nx * vn; v.y -= nz * vn; } // slide along the surface
-  };
-
-  for (let pass = 0; pass < 2; pass++) {
-    for (const b of colliders) {
-      const cx = clamp(px, b.minX, b.maxX);
-      const cz = clamp(pz, b.minZ, b.maxZ);
-      const dx = px - cx, dz = pz - cz;
-      const d2 = dx * dx + dz * dz;
-      if (d2 >= r * r) continue;
-      if (d2 > 1e-8) {
-        const d = Math.sqrt(d2);
-        pushOut(dx / d, dz / d, r - d);
-      } else {
-        // Centre is inside the box: push out the nearest side.
-        const sides = [
-          [px - b.minX, -1, 0], [b.maxX - px, 1, 0],
-          [pz - b.minZ, 0, -1], [b.maxZ - pz, 0, 1],
-        ].sort((a, c) => a[0] - c[0]);
-        const [dist, nx, nz] = sides[0];
-        pushOut(nx, nz, dist + r);
-      }
-    }
-  }
-
-  // Level bounds
-  if (px < -halfW + r) { px = -halfW + r; v.x = Math.max(0, v.x); }
-  if (px > halfW - r) { px = halfW - r; v.x = Math.min(0, v.x); }
-  if (pz < -halfD + r) { pz = -halfD + r; v.y = Math.max(0, v.y); }
-  if (pz > halfD - r) { pz = halfD - r; v.y = Math.min(0, v.y); }
-  return [px, pz];
-}
 
 function updateRobot(dt) {
   const input = won ? { x: 0, y: 0 } : readInput();
@@ -525,7 +421,7 @@ function updateRobot(dt) {
   v.y += (input.y * R.maxSpeed - v.y) * k;
   if (mag < 0.05 && v.lengthSq() < 0.0004) v.set(0, 0);
 
-  const [px, pz] = collide(robot.root.position.x + v.x * dt, robot.root.position.z + v.y * dt);
+  const [px, pz] = collide(robot.root.position.x + v.x * dt, robot.root.position.z + v.y * dt, R.radius, v, level);
   robot.root.position.x = px;
   robot.root.position.z = pz;
 
@@ -572,8 +468,8 @@ function updatePickups(dt, t) {
   for (const p of pickups) {
     if (p.taken) continue;
     p.mesh.rotation.y = t * 1.6 + p.phase;
-    p.mesh.position.y = 0.95 + Math.sin(t * 2.4 + p.phase) * 0.1;
-    if (Math.hypot(p.x - x, p.z - z) < L.pickupRadius) collect(p);
+    p.mesh.position.y = p.baseY + Math.sin(t * 2.4 + p.phase) * 0.1;
+    if (Math.hypot(p.x - x, p.z - z) < CONFIG.pickupRadius) collect(p);
   }
   for (let i = effects.length - 1; i >= 0; i--) {
     const e = effects[i];
@@ -598,6 +494,7 @@ renderer.setAnimationLoop(() => {
   const t = clock.elapsedTime;
   if (dt <= 0) return; // first frame can have zero elapsed time
   updateRobot(dt);
+  updateCamera(dt);
   updatePickups(dt, t);
   if (DEBUG) {
     const p = robot.root.position;
@@ -605,52 +502,3 @@ renderer.setAnimationLoop(() => {
   }
   renderer.render(scene, camera);
 });
-
-// ---------------------------------------------------------------------------
-// Layout, fullscreen, messages
-// ---------------------------------------------------------------------------
-
-function layout() {
-  const W = window.innerWidth;
-  const H = window.innerHeight;
-  let w = W;
-  let h = W / CONFIG.stageAspect;
-  if (h > H) {
-    h = H;
-    w = H * CONFIG.stageAspect;
-  }
-  w = Math.floor(w);
-  h = Math.floor(h);
-  stage.style.width = `${w}px`;
-  stage.style.height = `${h}px`;
-  renderer.setSize(w, h, false);
-  joystick.rest();
-}
-addEventListener('resize', layout);
-document.addEventListener('fullscreenchange', layout);
-layout();
-
-const fsBtn = $('fullscreen');
-const standalone = matchMedia('(display-mode: fullscreen), (display-mode: standalone)').matches;
-if (!document.fullscreenEnabled || standalone) fsBtn.hidden = true;
-fsBtn.addEventListener('click', async () => {
-  try {
-    if (!document.fullscreenElement) {
-      await document.documentElement.requestFullscreen({ navigationUI: 'hide' });
-      try { await screen.orientation.lock('landscape'); } catch { /* not supported everywhere */ }
-    } else {
-      await document.exitFullscreen();
-    }
-  } catch (err) {
-    console.warn('Fullscreen failed:', err);
-  }
-});
-
-let toastTimer;
-function showToast(text, ms = 4500) {
-  const el = $('toast');
-  el.textContent = text;
-  el.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.hidden = true; }, ms);
-}

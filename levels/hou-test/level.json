@@ -1,0 +1,9 @@
+{
+  "name": "Houdini export test",
+  "model": "../../assets/levels/level1.glb",
+  "texture": "../../assets/textures/level_atlas.jpg",
+  "bounds": { "minX": -5, "maxX": 5, "minZ": -5, "maxZ": 5 },
+  "spawn": { "x": 0, "z": 0, "yaw": 0 },
+  "colliders": [],
+  "gems": []
+}

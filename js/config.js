@@ -1,5 +1,5 @@
 // Everything you'd want to tweak lives here.
-// World units: 1 unit ≈ 1 floor tile half. The level is centred on (0, 0).
+// Levels themselves live in levels/<name>/ (see LEVELS.md).
 // X = left/right on screen, Z = toward the camera (bottom of screen) is +Z.
 
 export const CONFIG = {
@@ -10,10 +10,15 @@ export const CONFIG = {
   // Caps rendering resolution. 1.75 looks sharp on the S6 and keeps it at 60fps.
   maxPixelRatio: 1.75,
 
+  // Folder name in levels/. Override with ?level=<name> in the address.
+  startLevel: 'level1',
+
   camera: {
-    fov: 32,        // lower = flatter, more "diorama" look
-    elevation: 52,  // degrees above the ground; 90 would be top-down
-    margin: 0.94,   // how much of the screen the level fills (1 = edge to edge)
+    fov: 32,         // lower = flatter, more "diorama" look
+    elevation: 52,   // degrees above the ground; 90 would be top-down
+    distance: 22,    // how far the camera sits from the robot; smaller = closer
+    followSpeed: 4,  // how quickly the camera catches up with the robot
+    edgePad: 1.5,    // how far past the level edge the view may reach
   },
 
   robot: {
@@ -43,55 +48,13 @@ export const CONFIG = {
     thrusterGlow: true,   // soft glow on the floor under the robot
   },
 
-  level: {
-    width: 20,
-    depth: 12,
+  pickupRadius: 0.9,
+
+  // Stand-in visuals for levels that have no GLB yet.
+  blockout: {
     wallHeight: 0.7,
     wallThickness: 0.5,
-    start: { x: 0, z: 2 },
-
-    // Boxes the robot can't pass through (visible blocks).
-    // x/z = centre, w = width (x), d = depth (z), h = height.
-    crates: [
-      { x: -5,   z: -2,  w: 2,   d: 2,   h: 1.2, color: 'orange' },
-      { x: -3.5, z: -2.5, w: 1,  d: 1,   h: 0.7, color: 'yellow' },
-      { x: 4,    z: 1.5, w: 3,   d: 1.2, h: 1.0, color: 'blue' },
-      { x: 0,    z: -4,  w: 1.4, d: 1.4, h: 1.8, color: 'orange' },
-      { x: 6.5,  z: -3.5, w: 1.2, d: 1.2, h: 2.4, color: 'blue' },
-      { x: -6.5, z: 3,   w: 1.6, d: 1.6, h: 1.0, color: 'yellow' },
-      { x: 2,    z: 4,   w: 1,   d: 1,   h: 0.7, color: 'orange' },
-    ],
-
-    // Invisible colliders, for blocking areas of a painted background image.
-    blockers: [
-      // { x: 0, z: 0, w: 2, d: 2 },
-    ],
-
-    // Gem positions [x, z]. Two are hidden behind tall crates to test occlusion.
-    pickups: [
-      [-8, -4.5], [0, -5.3], [6.5, -5.3], [8, 4.5],
-      [-8, 4.5], [-2, 1], [3, -1.5], [-4.5, 0.4],
-    ],
-    pickupRadius: 0.9,
   },
-
-  // ---- Image slot (optional) -------------------------------------------
-  // Put a painted 16:10 image (e.g. 2560×1600) in assets/ and set its path.
-  // It's shown behind the 3D scene. With hideBlocks: true, the block level is
-  // hidden but colliders and pickups still work, and shadows still fall on
-  // the "floor". Open the game with ?debug to see colliders and coordinates
-  // while you line things up with the painting.
-  background: {
-    url: null,            // e.g. 'assets/background.jpg'
-    hideBlocks: true,
-  },
-
-  // Cut-out PNGs (with transparency) standing upright in the scene.
-  // The robot disappears behind them when it drives behind (z smaller than theirs).
-  // x/z = where the cut-out stands on the floor, width/height in world units.
-  occluders: [
-    // { url: 'assets/tree.png', x: -3, z: 1, width: 3, height: 4 },
-  ],
 
   colors: {
     sky: 0xbde4ee,

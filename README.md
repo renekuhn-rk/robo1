@@ -31,26 +31,28 @@ then open http://localhost:8000. Arrow keys or WASD drive on a desktop.
 On the tablet, open that link in Chrome, then menu > "Add to Home screen".
 Launched from the home screen it runs fullscreen in landscape.
 
+## Levels
+
+Levels are folders in `levels/` with a `level.json` (colliders, gems, start
+position) and an optional `level.glb` for the visuals. `LEVELS.md` describes
+the format and the Houdini export. The camera follows the robot, so a level
+can be larger than the screen.
+
+Open another level with `?level=<folder>`, e.g. `.../?level=test-big`.
+
 ## Debug mode
 
-Add `?debug` to the address (e.g. `.../robot-run/?debug`) to see colliders,
-a floor grid, the robot's x/z position and the frame rate. Use the position
-readout to place gems, crates and blockers in `js/config.js`.
-
-## Painted background (image slot)
-
-1. Put a 16:10 image (e.g. 2560x1600) in `assets/`.
-2. In `js/config.js` set `background.url` to its path, e.g. `'assets/background.jpg'`.
-3. The block level hides; collisions, gems and the robot's shadow keep working.
-   Use `level.blockers` for invisible walls and `occluders` for cut-out PNGs
-   the robot can drive behind.
+Add `?debug` to the address (e.g. `.../?level=level1&debug`) to see colliders,
+a floor grid, the robot's x/z position and the frame rate.
 
 ## Files
 
     index.html            page + HUD
     css/style.css         layout, joystick, counter, messages
     js/config.js          everything tunable
-    js/main.js            scene, level, robot motion, gems
+    js/main.js            scene, camera, robot motion, gems
+    js/level.js           level loading, block-out visuals, collision
+    levels/               one folder per level (see LEVELS.md)
     js/joystick.js        floating on-screen joystick
     manifest.webmanifest  home-screen app settings
     assets/               robot.glb, icons, images
