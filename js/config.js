@@ -16,7 +16,7 @@ export const CONFIG = {
   camera: {
     fov: 32,         // lower = flatter, more "diorama" look
     elevation: 52,   // degrees above the ground; 90 would be top-down
-    distance: 22,    // how far the camera sits from the robot; smaller = closer
+    distance: 12,   // how far the camera sits from the robot; smaller = closer
     followSpeed: 4,  // how quickly the camera catches up with the robot
     edgePad: 1.5,    // how far past the level edge the view may reach
   },

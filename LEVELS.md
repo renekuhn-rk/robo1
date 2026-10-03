@@ -47,29 +47,34 @@ The level that loads without `?level=` is `startLevel` in `js/config.js`.
 
 **Visuals:** a `ROP glTF Output` node (in `/out`, or the `rop_gltf` SOP), export type `glb`, pointed at the visual geometry only.
 
-**Gameplay data:** build one point cloud in SOPs with these attributes, then run the script below (shelf tool, or the Post-Render Script of the glTF ROP).
+**Gameplay data:** build one point cloud in SOPs with these attributes, then wire it into a **Python SOP** with the script below: input 0 = the marker points, input 1 = the floor (its bounding box is the playable area). Add a directory parameter named `outpath` to the Python SOP; `level.json` is written into that folder each time the node cooks.
 
 | Point attribute | Type | Used for |
 |---|---|---|
 | `type` | string | `collider`, `gem` or `spawn` |
 | `P` | position | centre of the collider / gem / spawn |
 | `size` | vector | collider size (x = width, y = height, z = depth) |
-| `rot` | float | rotation around Y in degrees (colliders: box rotation, spawn: facing) |
+| `rot_y` | float | rotation around Y in degrees (colliders: box rotation, spawn: facing). Not named `rot`, because Houdini treats `rot` as a quaternion. |
 
 ```python
-import hou, json
+import hou, json, os
 
-MARKERS = '/obj/level/OUT_gameplay'   # SOP with the marker points
-FLOOR   = '/obj/level/OUT_floor'      # SOP whose bounding box is the playable area
-OUT     = '$HIP/export/level1/level.json'
+node = hou.pwd()
+geo = node.geometry()                  # input 0: the marker points
+bb = node.inputs()[1].geometry().boundingBox()   # input 1: the floor
+outdir = node.evalParm('outpath')      # directory parameter on this node
 
 r = lambda v: round(float(v), 3)
-geo = hou.node(MARKERS).geometry()
-bb = hou.node(FLOOR).geometry().boundingBox()
+
+def attr(pt, name, default):
+    # Value of a point attribute, or the default if the attribute doesn't exist
+    a = geo.findPointAttrib(name)
+    return pt.attribValue(a) if a else default
 
 level = {
     'name': 'Level 1',
     'model': 'level.glb',
+    'texture': '../../assets/textures/level_atlas.jpg',   # only for a GLB without its own material
     'bounds': {'minX': r(bb.minvec()[0]), 'maxX': r(bb.maxvec()[0]),
                'minZ': r(bb.minvec()[2]), 'maxZ': r(bb.maxvec()[2])},
     'spawn': {'x': 0, 'z': 0, 'yaw': 0},
@@ -77,21 +82,22 @@ level = {
     'gems': [],
 }
 for pt in geo.points():
-    kind, p = pt.attribValue('type'), pt.position()
+    kind, p = attr(pt, 'type', ''), pt.position()
     if kind == 'collider':
-        s = pt.attribValue('size')
+        s = attr(pt, 'size', (1, 1, 1))
         level['colliders'].append({'x': r(p[0]), 'z': r(p[2]), 'w': r(s[0]), 'd': r(s[2]),
-                                   'h': r(s[1]), 'rot': r(pt.attribValue('rot'))})
+                                   'h': r(s[1]), 'rot': r(attr(pt, 'rot_y', 0))})
     elif kind == 'gem':
         level['gems'].append([r(p[0]), r(p[2])])
     elif kind == 'spawn':
-        level['spawn'] = {'x': r(p[0]), 'z': r(p[2]), 'yaw': r(pt.attribValue('rot'))}
+        level['spawn'] = {'x': r(p[0]), 'z': r(p[2]), 'yaw': r(attr(pt, 'rot_y', 0))}
 
-with open(hou.text.expandString(OUT), 'w') as f:
+os.makedirs(outdir, exist_ok=True)
+with open(os.path.join(outdir, 'level.json'), 'w') as f:
     json.dump(level, f, indent=2)
 ```
 
-This script has not been run in Houdini yet; adjust the node paths to your setup.
+This script has not been run in Houdini yet.
 
 Copy the exported folder into `levels/`, then open `?level=<name>&debug` and check
 that the red collider wireframes sit on the geometry.
