@@ -65,8 +65,13 @@ Object.assign(sun.shadow.camera, { left: -shadowHalf, right: shadowHalf, top: sh
 sun.shadow.bias = -0.0004;
 sun.shadow.normalBias = 0.02;
 scene.add(sun, sun.target);
-const sunRot = new THREE.Matrix4().lookAt(sunOffset, new THREE.Vector3(), new THREE.Vector3(0, 1, 0));
-const sunRotInv = sunRot.clone().invert();
+const sunRot = new THREE.Matrix4();
+const sunRotInv = new THREE.Matrix4();
+function aimSun() {
+  sunRot.lookAt(sunOffset, new THREE.Vector3(), new THREE.Vector3(0, 1, 0));
+  sunRotInv.copy(sunRot).invert();
+}
+aimSun();
 
 // ---------------------------------------------------------------------------
 // Messages
@@ -156,13 +161,19 @@ gltfLoader.setDRACOLoader(draco);
 
 let level;
 try {
-  level = await loadLevel(params.get('level') || CONFIG.startLevel, gltfLoader, renderer.capabilities.getMaxAnisotropy());
+  level = await loadLevel(params.get('level') || CONFIG.startLevel, gltfLoader, renderer);
 } catch (err) {
   loadingEl.classList.add('done');
   showToast(`Couldn't load the level: ${err.message}`, 20000);
   throw err;
 }
 scene.add(level.visuals);
+
+// A level can point the sun where its baked lighting has it.
+if (level.sun) {
+  sunOffset.fromArray(level.sun).setLength(17);
+  aimSun();
+}
 
 if (DEBUG) {
   for (const c of level.colliders) {
@@ -498,7 +509,8 @@ renderer.setAnimationLoop(() => {
   updatePickups(dt, t);
   if (DEBUG) {
     const p = robot.root.position;
-    debugEl.textContent = `x ${p.x.toFixed(2)}  z ${p.z.toFixed(2)}\n${Math.round(1 / Math.max(dt, 1e-3))} fps`;
+    const splats = level.splat ? `\n${level.splat.numSplats.toLocaleString()} splats` : '';
+    debugEl.textContent = `x ${p.x.toFixed(2)}  z ${p.z.toFixed(2)}\n${Math.round(1 / Math.max(dt, 1e-3))} fps${splats}`;
   }
   renderer.render(scene, camera);
 });

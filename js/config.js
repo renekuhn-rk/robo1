@@ -56,6 +56,12 @@ export const CONFIG = {
     wallThickness: 0.5,
   },
 
+  // Levels drawn as a gaussian splat ("splat" in level.json).
+  splat: {
+    shadowOpacity: 0.4, // darkness of the robot's shadow on the splat
+    catcherPad: 2,      // how far the stand-in shadow floor reaches past the bounds
+  },
+
   colors: {
     sky: 0xbde4ee,
     floor: 0x8fd3c1,

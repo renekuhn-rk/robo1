@@ -3,3 +3,4 @@ files/
 hou/
 .claude/
 HANDOFF.md
+levels/**/*.ply

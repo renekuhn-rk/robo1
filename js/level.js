@@ -1,5 +1,5 @@
-// Levels live in levels/<name>/: level.json (gameplay data) and an optional
-// GLB with the visuals. See LEVELS.md for the format.
+// Levels live in levels/<name>/: level.json (gameplay data) and optional
+// visuals: a GLB, a gaussian splat, or both. See LEVELS.md for the format.
 
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
@@ -8,9 +8,11 @@ import { CONFIG } from './config.js';
 const DEG = Math.PI / 180;
 const COL = CONFIG.colors;
 const B = CONFIG.blockout;
+const S = CONFIG.splat;
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 
-export async function loadLevel(name, gltfLoader, maxAnisotropy = 1) {
+export async function loadLevel(name, gltfLoader, renderer) {
+  const maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
   const base = `levels/${name}/`;
   const res = await fetch(`${base}level.json`);
   if (!res.ok) throw new Error(`${base}level.json not found (${res.status})`);
@@ -32,6 +34,8 @@ export async function loadLevel(name, gltfLoader, maxAnisotropy = 1) {
       const rot = (c.rot ?? 0) * DEG;
       return { x: c.x, z: c.z, hw: c.w / 2, hd: c.d / 2, h: c.h ?? 1, rot, cos: Math.cos(rot), sin: Math.sin(rot), color: c.color };
     }),
+    sun: data.sun,
+    splat: null,
     visuals: new THREE.Group(),
   };
 
@@ -55,10 +59,80 @@ export async function loadLevel(name, gltfLoader, maxAnisotropy = 1) {
       }
     });
     level.visuals.add(gltf.scene);
-  } else {
+  }
+  if (data.splat) {
+    await addSplat(level, data, base, gltfLoader, renderer);
+  } else if (!data.model) {
     buildBlockout(level, maxAnisotropy);
   }
   return level;
+}
+
+// Gaussian splat visuals. Spark is only downloaded for levels that use one.
+async function addSplat(level, data, base, gltfLoader, renderer) {
+  const opt = typeof data.splat === 'string' ? { file: data.splat } : data.splat;
+  const { SparkRenderer, SplatMesh } = await import('@sparkjsdev/spark');
+
+  // All splats are drawn by this one object, sorted back to front, after the
+  // solid meshes. They test against the depth buffer but don't write to it:
+  // the robot hides splats behind it and splats in front of it cover it.
+  const spark = new SparkRenderer({ renderer });
+  spark.renderOrder = -3;
+  level.visuals.add(spark);
+
+  const splat = new SplatMesh({ url: base + opt.file });
+  if (opt.position) splat.position.fromArray(opt.position);
+  if (opt.rotation) splat.rotation.set(...opt.rotation.map((d) => d * DEG));
+  if (opt.scale) splat.scale.setScalar(opt.scale);
+  try {
+    await splat.initialized;
+  } catch (err) {
+    throw new Error(`${base}${opt.file} could not be loaded (${err?.message ?? err})`);
+  }
+  level.visuals.add(splat);
+  level.splat = splat;
+
+  let source = null;
+  if (data.shadowCatcher) source = (await gltfLoader.loadAsync(base + data.shadowCatcher)).scene;
+  buildShadowCatcher(level, source, data.shadowOpacity ?? S.shadowOpacity);
+}
+
+// Splats can't receive shadows, so an invisible mesh that only shows the
+// shadows falling on it sits where the splat's surfaces are. `source` is the
+// level's catcher GLB; without one the floor and the collider boxes are used.
+function buildShadowCatcher(level, source, opacity) {
+  if (!source) {
+    source = new THREE.Group();
+    const pad = S.catcherPad;
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(level.width + pad * 2, level.depth + pad * 2));
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.set(level.centerX, 0, level.centerZ);
+    source.add(floor);
+    for (const c of level.colliders) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(c.hw * 2, c.h, c.hd * 2));
+      m.position.set(c.x, c.h / 2, c.z);
+      m.rotation.y = c.rot;
+      source.add(m);
+    }
+  }
+
+  // Two passes, both after the splats. The first only fills the depth buffer,
+  // so the catcher hides its own far sides; written before the splats it would
+  // cut into them. The second darkens the picture where shadows fall.
+  const depthMat = new THREE.MeshBasicMaterial({ colorWrite: false, transparent: true });
+  const shadowMat = new THREE.ShadowMaterial({ opacity, depthWrite: false });
+  const meshes = [];
+  source.traverse((o) => { if (o.isMesh) meshes.push(o); });
+  for (const m of meshes) {
+    m.material = shadowMat;
+    m.castShadow = false;
+    m.receiveShadow = true;
+    m.renderOrder = -1;
+    const depth = new THREE.Mesh(m.geometry, depthMat);
+    depth.renderOrder = -2;
+    m.add(depth);
+  }
+  level.visuals.add(source);
 }
 
 function playmatTexture(level, maxAnisotropy) {
