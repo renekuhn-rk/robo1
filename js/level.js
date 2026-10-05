@@ -11,10 +11,14 @@ const B = CONFIG.blockout;
 const S = CONFIG.splat;
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 
+// On the local test server, skip the browser cache so a re-exported level
+// shows up on the next reload.
+const fresh = ['localhost', '127.0.0.1'].includes(location.hostname) ? `?t=${Date.now()}` : '';
+
 export async function loadLevel(name, gltfLoader, renderer) {
   const maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
   const base = `levels/${name}/`;
-  const res = await fetch(`${base}level.json`);
+  const res = await fetch(`${base}level.json${fresh}`);
   if (!res.ok) throw new Error(`${base}level.json not found (${res.status})`);
   const data = await res.json();
   const b = data.bounds;
@@ -40,12 +44,12 @@ export async function loadLevel(name, gltfLoader, renderer) {
   };
 
   if (data.model) {
-    const gltf = await gltfLoader.loadAsync(base + data.model);
+    const gltf = await gltfLoader.loadAsync(base + data.model + fresh);
     const cast = data.castShadows ?? true; // set false once lighting is baked into the textures
     // Optional atlas for a GLB exported without a material.
     let atlasMat = null;
     if (data.texture) {
-      const tex = await new THREE.TextureLoader().loadAsync(base + data.texture);
+      const tex = await new THREE.TextureLoader().loadAsync(base + data.texture + fresh);
       tex.colorSpace = THREE.SRGBColorSpace;
       tex.flipY = false; // glTF UV convention
       tex.anisotropy = maxAnisotropy;
@@ -80,7 +84,7 @@ async function addSplat(level, data, base, gltfLoader, renderer) {
   spark.renderOrder = -3;
   level.visuals.add(spark);
 
-  const splat = new SplatMesh({ url: base + opt.file });
+  const splat = new SplatMesh({ url: base + opt.file + fresh, fileName: opt.file });
   if (opt.position) splat.position.fromArray(opt.position);
   if (opt.rotation) splat.rotation.set(...opt.rotation.map((d) => d * DEG));
   if (opt.scale) splat.scale.setScalar(opt.scale);
@@ -93,7 +97,7 @@ async function addSplat(level, data, base, gltfLoader, renderer) {
   level.splat = splat;
 
   let source = null;
-  if (data.shadowCatcher) source = (await gltfLoader.loadAsync(base + data.shadowCatcher)).scene;
+  if (data.shadowCatcher) source = (await gltfLoader.loadAsync(base + data.shadowCatcher + fresh)).scene;
   buildShadowCatcher(level, source, data.shadowOpacity ?? S.shadowOpacity);
 }
 
