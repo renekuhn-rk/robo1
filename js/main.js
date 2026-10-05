@@ -169,6 +169,12 @@ try {
 }
 scene.add(level.visuals);
 
+// Splats are soft and costly to fill, so splat levels render at a lower resolution.
+if (level.splat) {
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, CONFIG.splat.maxPixelRatio));
+  layout();
+}
+
 // A level can point the sun where its baked lighting has it.
 if (level.sun) {
   sunOffset.fromArray(level.sun).setLength(17);
@@ -211,21 +217,31 @@ const robot = {
   prevFwd: 0,
   accel: 0,
   hoverPhase: 0,
-  glow: null,
+  shadow: null,
 };
 robot.root.add(robot.hover);
 robot.hover.add(robot.lean);
 robot.lean.add(robot.holder);
 scene.add(robot.root);
 
-if (R.thrusterGlow) {
-  robot.glow = new THREE.Mesh(
-    new THREE.CircleGeometry(R.radius * 0.85, 32),
-    new THREE.MeshBasicMaterial({ color: 0x8ff6ff, transparent: true, opacity: 0.4, depthWrite: false, blending: THREE.AdditiveBlending })
+// Soft dark blob on the floor that grounds the hovering robot.
+if (R.contactShadow) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const fade = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  fade.addColorStop(0, 'rgba(0,0,0,1)');
+  fade.addColorStop(0.4, 'rgba(0,0,0,0.6)');
+  fade.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = fade;
+  g.fillRect(0, 0, 128, 128);
+  robot.shadow = new THREE.Mesh(
+    new THREE.PlaneGeometry(R.radius * 2.8, R.radius * 2.8),
+    new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, opacity: R.contactShadow, depthWrite: false })
   );
-  robot.glow.rotation.x = -Math.PI / 2;
-  robot.glow.position.y = 0.015;
-  robot.root.add(robot.glow);
+  robot.shadow.rotation.x = -Math.PI / 2;
+  robot.shadow.position.y = 0.015;
+  robot.root.add(robot.shadow);
 }
 
 // Scales any model to R.height, stands it on y=0, centres it, and sets the tilt pivot.
@@ -468,9 +484,10 @@ function updateRobot(dt) {
   const bob = Math.sin(robot.hoverPhase);
   robot.hover.position.y = R.hoverHeight + bob * R.hoverAmplitude;
 
-  if (robot.glow) {
-    robot.glow.material.opacity = 0.3 + 0.12 * -bob + speedRatio * 0.1;
-    robot.glow.scale.setScalar(1 - bob * 0.06);
+  // Wider and fainter as the robot bobs up.
+  if (robot.shadow) {
+    robot.shadow.material.opacity = R.contactShadow * (1 - bob * 0.15);
+    robot.shadow.scale.setScalar(1 + bob * 0.06);
   }
 }
 

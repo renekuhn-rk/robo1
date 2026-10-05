@@ -80,7 +80,9 @@ async function addSplat(level, data, base, gltfLoader, renderer) {
   // All splats are drawn by this one object, sorted back to front, after the
   // solid meshes. They test against the depth buffer but don't write to it:
   // the robot hides splats behind it and splats in front of it cover it.
-  const spark = new SparkRenderer({ renderer });
+  // The camera never turns, so sorting by depth along the view direction
+  // stays valid while it moves and doesn't need redoing every frame.
+  const spark = new SparkRenderer({ renderer, maxStdDev: S.maxStdDev, sortRadial: false, minSortIntervalMs: S.sortInterval });
   spark.renderOrder = -3;
   level.visuals.add(spark);
 

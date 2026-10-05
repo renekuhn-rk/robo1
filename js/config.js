@@ -45,7 +45,7 @@ export const CONFIG = {
     maxBank: 10,          // degrees of sideways tilt into turns
     bankAmount: 3,        // how strongly turns cause banking
 
-    thrusterGlow: true,   // soft glow on the floor under the robot
+    contactShadow: 0.5,   // darkness of the soft shadow on the floor under the robot; 0 = none
   },
 
   pickupRadius: 0.9,
@@ -59,6 +59,9 @@ export const CONFIG = {
   // Levels drawn as a gaussian splat ("splat" in level.json).
   splat: {
     shadowOpacity: 0.4, // darkness of the robot's shadow on the splat
+    maxPixelRatio: 1.25, // rendering resolution on splat levels; lower = faster, softer
+    maxStdDev: 2.2,     // how far each splat is drawn from its centre; lower = faster, harder edges (Spark's default is 2.83)
+    sortInterval: 250,  // milliseconds between re-sorts of the splats while the camera moves
     catcherPad: 2,      // how far the stand-in shadow floor reaches past the bounds
   },
 

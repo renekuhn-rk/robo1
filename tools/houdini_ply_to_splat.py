@@ -14,6 +14,15 @@ are converted to sRGB here. Add --raw to keep them unchanged.
 
 --gamma adjusts the brightness afterwards: above 1 is brighter, below 1 is
 darker, 1 (the default) changes nothing. Black and white stay where they are.
+
+Houdini writes Cd into the PLY as whole numbers 0-255, and values outside 0-1
+wrap around into wrong, bright colours. To avoid that, copy the colour to a
+vector attribute named "splatcolor" before saving (v@splatcolor = @Cd;). It is
+saved as decimals and used here instead of Cd when present.
+
+--crop drops splats outside the playable area: more than the given distance
+(default 1) beyond the bounds in the level.json next to the PLY, or more than
+that far below the floor.
 """
 import os, sys
 import numpy as np
@@ -24,6 +33,10 @@ TYPES = {'float': 'f4', 'double': 'f8', 'uchar': 'u1', 'char': 'i1',
 args = sys.argv[1:]
 raw = '--raw' in args
 gamma = float(args[args.index('--gamma') + 1]) if '--gamma' in args else 1.0
+crop = None
+if '--crop' in args:
+    after = args[args.index('--crop') + 1:]
+    crop = float(after[0]) if after and not after[0].startswith('--') else 1.0
 src = args[0]
 with open(src, 'rb') as f:
     data = f.read()
@@ -40,7 +53,7 @@ for line in data[:end].decode('ascii').splitlines():
     elif w[:1] == ['property'] and in_vertex:
         fields.append((w[2], endian + TYPES[w[1]]))
 pts = np.frombuffer(data, dtype=np.dtype(fields), count=count, offset=end)
-missing = [n for n in ('x', 'red', 'GS_Alpha', 'orient1', 'scale1') if n not in pts.dtype.names]
+missing = [n for n in ('x', 'GS_Alpha', 'orient1', 'scale1') if n not in pts.dtype.names]
 if missing:
     sys.exit(f'{src}: missing attributes {missing}. Found: {pts.dtype.names}')
 
@@ -48,7 +61,12 @@ col = lambda *names: np.stack([pts[n].astype(np.float32) for n in names], axis=1
 out = np.zeros(count, dtype=[('pos', '<f4', 3), ('scale', '<f4', 3), ('rgba', 'u1', 4), ('rot', 'u1', 4)])
 out['pos'] = col('x', 'y', 'z')
 out['scale'] = col('scale1', 'scale2', 'scale3')
-rgb = col('red', 'green', 'blue') / 255
+if 'splatcolor1' in pts.dtype.names:
+    rgb = np.clip(col('splatcolor1', 'splatcolor2', 'splatcolor3'), 0, 1)
+    print('colour from splatcolor')
+else:
+    rgb = col('red', 'green', 'blue') / 255
+    print('colour from Cd (8-bit); out-of-range colours may have wrapped, see the notes at the top of this script')
 if not raw:
     rgb = np.where(rgb <= 0.0031308, rgb * 12.92, 1.055 * rgb ** (1 / 2.4) - 0.055)  # linear -> sRGB
 rgb = rgb ** (1 / gamma)
@@ -56,6 +74,17 @@ out['rgba'][:, :3] = np.round(rgb * 255)
 out['rgba'][:, 3] = np.clip(np.round(pts['GS_Alpha'] * 255), 0, 255)
 # .splat stores the rotation as w x y z
 out['rot'] = np.clip(np.round(col('orient4', 'orient1', 'orient2', 'orient3') * 128 + 128), 0, 255)
+
+if crop is not None:
+    import json
+    with open(os.path.join(os.path.dirname(src), 'level.json')) as f:
+        b = json.load(f)['bounds']
+    x, y, z = out['pos'].T
+    keep = ((x > b['minX'] - crop) & (x < b['maxX'] + crop) &
+            (z > b['minZ'] - crop) & (z < b['maxZ'] + crop) & (y > -crop))
+    print(f'crop: dropped {count - keep.sum():,} of {count:,} splats')
+    out = out[keep]
+    count = len(out)
 
 dst = os.path.splitext(src)[0] + '.splat'
 out.tofile(dst)
