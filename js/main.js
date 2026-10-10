@@ -70,9 +70,14 @@ addEventListener('blur', () => keys.clear());
 
 // Game controller (Xbox and similar): left stick or d-pad to drive, A to
 // confirm. Returns null when no controller is connected.
+// Windows also lists other devices (wheels, headsets, odd USB gadgets) as
+// controllers, so only ones with the standard button layout are read, and
+// of those the one whose stick is pushed furthest.
 function readGamepad() {
+  const dead = CONFIG.gamepadDeadzone;
+  let best = null;
   for (const pad of navigator.getGamepads?.() ?? []) {
-    if (!pad?.connected) continue;
+    if (!pad?.connected || pad.mapping !== 'standard') continue;
     const b = pad.buttons;
     let x = pad.axes[0] ?? 0;
     let y = pad.axes[1] ?? 0;
@@ -82,11 +87,12 @@ function readGamepad() {
     if (b[13]?.pressed) y = 1;
     // Full range starts at the edge of the dead zone and is capped at 1.
     const len = Math.hypot(x, y);
-    const dead = CONFIG.gamepadDeadzone;
     const mag = len > dead ? Math.min(1, (len - dead) / (1 - dead)) : 0;
-    return { x: mag ? (x / len) * mag : 0, y: mag ? (y / len) * mag : 0, confirm: !!b[0]?.pressed };
+    const confirm = !!b[0]?.pressed || !!best?.confirm;
+    if (!best || mag > best.mag) best = { x: mag ? (x / len) * mag : 0, y: mag ? (y / len) * mag : 0, mag };
+    best.confirm = confirm;
   }
-  return null;
+  return best;
 }
 
 function readInput() {
