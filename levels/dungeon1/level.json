@@ -1,0 +1,48 @@
+{
+  "name": "Test for dungeon",
+  "model": "level.glb",
+  "texture": "dungeon_tex_diffuse.jpg",
+  "collision": "collision.glb",
+  "castShadows": false,
+  "camera": {
+    "elevation": 75.0,
+    "distance": 24.0
+  },
+  "bounds": {
+    "minX": -36.345,
+    "maxX": 37.809,
+    "minZ": -28.589,
+    "maxZ": 26.426
+  },
+  "spawn": {
+    "x": -32.576,
+    "z": 17.106,
+    "yaw": 0.0
+  },
+  "colliders": [],
+  "gems": [],
+  "keys": [
+    [
+      32.403,
+      23.183
+    ],
+    [
+      -14.968,
+      -24.708
+    ]
+  ],
+  "treasures": [
+    [
+      1.29,
+      -5.853
+    ],
+    [
+      -18.084,
+      -17.696
+    ]
+  ],
+  "goal": {
+    "x": -32.829,
+    "z": -17.256
+  }
+}

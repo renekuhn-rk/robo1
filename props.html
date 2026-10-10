@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Robot Run: key and chest models</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #bde4ee; font-family: "Trebuchet MS", system-ui, sans-serif; color: #22305c; }
+    canvas { display: block; width: 100%; height: 100%; }
+    .label { position: absolute; transform: translate(-50%, 0); font-weight: 700; font-size: 15px; white-space: nowrap; text-align: center; }
+    .label small { display: block; font-weight: 400; opacity: 0.75; }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <script type="module">
+    // Shows the three key and three chest models from js/props.js side by side.
+    import * as THREE from 'three';
+    import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+    import { makeKey, makeChest } from './js/props.js';
+
+    const canvas = document.getElementById('view');
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xbde4ee);
+    scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environmentIntensity = 0.3;
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x6f9c90, 0.8));
+    const sun = new THREE.DirectionalLight(0xfff3e0, 2.3);
+    sun.position.set(-6, 14, 7);
+    scene.add(sun);
+    const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
+
+    const NOTES = {
+      key: ['classic', 'chunky toy', 'ornate'],
+      chest: ['classic wooden', 'toy, treasure colour', 'open, with gold'],
+    };
+    const items = [];
+    for (const [row, kind, make] of [[0, 'key', makeKey], [1, 'chest', makeChest]]) {
+      for (let i = 0; i < 3; i++) {
+        const model = make(i + 1);
+        const x = (i - 1) * 1.6;
+        const y = row === 0 ? 1.15 : -1.05;
+        model.position.set(x, y, 0);
+        scene.add(model);
+        const label = document.createElement('div');
+        label.className = 'label';
+        label.innerHTML = `${kind === 'key' ? 'Key' : 'Chest'} ${i + 1}<small>${NOTES[kind][i]}</small>`;
+        document.body.append(label);
+        items.push({ model, label, anchor: new THREE.Vector3(x, y - (row === 0 ? 0.6 : 0.15), 0) });
+      }
+    }
+
+    function layout() {
+      const w = innerWidth, h = innerHeight;
+      renderer.setSize(w, h, false);
+      camera.aspect = w / h;
+      // Far enough back that all six fit, whatever the window shape.
+      const half = Math.tan((camera.fov / 2) * Math.PI / 180);
+      camera.position.set(0, 1.6, Math.max(2.5 / half, 3.2 / (half * camera.aspect)));
+      camera.lookAt(0, 0.1, 0);
+      camera.updateProjectionMatrix();
+      camera.updateMatrixWorld();
+      for (const { label, anchor } of items) {
+        const p = anchor.clone().project(camera);
+        label.style.left = `${(p.x * 0.5 + 0.5) * w}px`;
+        label.style.top = `${(-p.y * 0.5 + 0.5) * h}px`;
+      }
+    }
+    addEventListener('resize', layout);
+    layout();
+
+    renderer.setAnimationLoop((ms) => {
+      for (const { model } of items) model.rotation.y = ms * 0.0008;
+      renderer.render(scene, camera);
+    });
+  </script>
+</body>
+</html>

@@ -31,7 +31,12 @@ The level that loads without `?level=` is `startLevel` in `js/config.js`.
 | `bounds` | The rectangle the robot can't leave. Also limits the camera. |
 | `spawn` | Robot start. `yaw` in degrees; 0 faces the camera (+Z). |
 | `colliders` | Boxes the robot can't pass. `x`/`z` = centre, `w` = size along X, `d` = size along Z, `rot` = rotation around Y in degrees (optional), `h` = height (only for the debug view and block-out). |
-| `gems` | `[x, z]` pairs, or `{ "x":, "y":, "z": }` to raise one off the floor. |
+| `gems` | `[x, z]` pairs, or `{ "x":, "y":, "z": }` to raise one off the floor. Without a `goal`, collecting all of them ends the level. |
+| `goal` | `{ "x":, "z": }`. Reaching it ends the level and shows how many treasures were found. |
+| `keys` | `[x, z]` pairs. Each one picked up adds a key to the counter. |
+| `treasures` | `[x, z]` pairs. A treasure only opens while the robot holds a key, and opening it spends that key (`treasureUsesKey` in `js/config.js`). Treasures are optional for finishing. |
+| `collision` | GLB of the walkable floor, see "Collision mesh levels". Replaces `colliders` for bumpy or winding levels. |
+| `camera` | Overrides for this level of the `camera` settings in `js/config.js`, e.g. `{ "elevation": 75, "distance": 16 }`. |
 | `model` | GLB file in the same folder. **Leave it out and the game draws a block-out** (floor, walls, one block per collider), so a level is playable from the JSON alone. |
 | `texture` | Image applied to the whole GLB, for exports that carry no material (path relative to the level folder). Leave out if the GLB has its own material. |
 | `castShadows` | Set `false` once lighting is baked into the textures. Default `true`. |
@@ -47,6 +52,17 @@ The level that loads without `?level=` is `startLevel` in `js/config.js`.
 - Visuals only: no cameras, lights or collision geometry.
 - Budget for the Tab S6: up to roughly 100–150k triangles, one 2048 px texture atlas, as few materials as possible (each material is a draw call; merge geometry that shares one).
 - Include normals and UVs. Use a Principled Shader with a base-colour texture; it exports as a standard glTF material.
+
+## Collision mesh levels
+
+For a level with winding corridors or uneven ground, export the walkable floor as `collision.glb` and set `"collision": "collision.glb"`.
+
+- **The floor is what counts.** Every upward-facing face is walkable ground; the robot is stopped where the floor ends. Walls in the file are ignored, so they are not needed, and the floor must not continue underneath walls or rocks.
+- **Height comes from the floor too.** The robot, the pickups and the goal sit on the mesh, so the ground may be bumpy or sloped. Marker heights are not needed.
+- Passages must be wider than 1.1 units for the robot to fit.
+- `&debug` draws the collision mesh as a red wireframe over the level.
+- With lighting painted into the texture, set `"castShadows": false`: the level then still shows the robot's shadow but doesn't compute its own, which is the expensive part. No shadow catcher is needed; that is only for splats.
+- Tall walls on the camera's side hide the corridor behind them. A steeper `camera.elevation` for the level reduces that.
 
 ## Gaussian splat levels
 
@@ -74,13 +90,13 @@ of them.
 
 **Visuals:** a `ROP glTF Output` node (in `/out`, or the `rop_gltf` SOP), export type `glb`, pointed at the visual geometry only.
 
-**Gameplay data:** build one point cloud in SOPs with these attributes, then wire it into a **Python SOP** with the script below: input 0 = the marker points, input 1 = the floor (its bounding box is the playable area). `level.json` is written each time the node cooks.
+**Gameplay data:** build one point cloud in SOPs with these attributes, then wire it into a **Python SOP** with the script below: input 0 = the marker points, input 1 = geometry whose bounding box is the level area (the floor, or the whole level model). `level.json` is written each time the node cooks.
 
 | Point attribute | Type | Used for |
 |---|---|---|
-| `type` | string | `collider`, `gem` or `spawn` |
-| `P` | position | centre of the collider / gem / spawn |
-| `size` | vector | collider size (x = width, y = height, z = depth) |
+| `type` | string | `spawn`, `goal`, `key`, `treasure`, `gem` or `collider` |
+| `P` | position | where it is. Only x and z are used. |
+| `size` | vector | colliders only: size (x = width, y = height, z = depth) |
 | `rot_y` | float | rotation around Y in degrees (colliders: box rotation, spawn: facing). Not named `rot`, because Houdini treats `rot` as a quaternion. |
 
 Add these parameters to the Python SOP (Edit Parameter Interface). Only `outpath` is required; a parameter that is missing or left empty is left out of the JSON.
@@ -91,7 +107,11 @@ Add these parameters to the Python SOP (Edit Parameter Interface). Only `outpath
 | `levelname` | String | `name` |
 | `model` | String | `model`, e.g. `level.glb`. Empty = no mesh visuals. |
 | `texture` | String | `texture`, only for a GLB without its own material |
-| `splat` | String | `splat`, e.g. `level.spz` |
+| `collision` | String | `collision`, e.g. `collision.glb` |
+| `castshadows` | Toggle | `castShadows`; turn off when lighting is painted into the texture |
+| `camelevation` | Float | `camera.elevation` in degrees; 0 = use the game's default |
+| `camdistance` | Float | `camera.distance`; 0 = use the game's default |
+| `splat` | String | `splat`, e.g. `level.splat` |
 | `shadowcatcher` | String | `shadowCatcher`, e.g. `catcher.glb` |
 | `shadowopacity` | Float | `shadowOpacity`; 0 = use the game's default |
 | `sun` | Float Vector 3 | `sun`, direction toward the light; 0 0 0 = use the game's default |
@@ -101,7 +121,7 @@ import hou, json, os
 
 node = hou.pwd()
 geo = node.geometry()                  # input 0: the marker points
-bb = node.inputs()[1].geometry().boundingBox()   # input 1: the floor
+bb = node.inputs()[1].geometry().boundingBox()   # input 1: the level area
 
 r = lambda v: round(float(v), 3)
 
@@ -119,11 +139,22 @@ outdir = parm('outpath')
 level = {'name': parm('levelname') or 'Level'}
 
 # File names: only written when the parameter is filled in
-for key, name in (('model', 'model'), ('texture', 'texture'),
+for key, name in (('model', 'model'), ('texture', 'texture'), ('collision', 'collision'),
                   ('splat', 'splat'), ('shadowCatcher', 'shadowcatcher')):
     value = str(parm(name)).strip()
     if value:
         level[key] = value
+
+if node.parm('castshadows'):
+    level['castShadows'] = bool(parm('castshadows'))
+
+camera = {}
+if parm('camelevation', 0) > 0:
+    camera['elevation'] = r(parm('camelevation'))
+if parm('camdistance', 0) > 0:
+    camera['distance'] = r(parm('camdistance'))
+if camera:
+    level['camera'] = camera
 
 if parm('shadowopacity', 0) > 0:
     level['shadowOpacity'] = r(parm('shadowopacity'))
@@ -138,17 +169,27 @@ level.update({
     'spawn': {'x': 0, 'z': 0, 'yaw': 0},
     'colliders': [],
     'gems': [],
+    'keys': [],
+    'treasures': [],
 })
+lists = {'gem': 'gems', 'key': 'keys', 'treasure': 'treasures'}
+unknown = set()
 for pt in geo.points():
     kind, p = attr(pt, 'type', ''), pt.position()
-    if kind == 'collider':
+    if kind in lists:
+        level[lists[kind]].append([r(p[0]), r(p[2])])
+    elif kind == 'spawn':
+        level['spawn'] = {'x': r(p[0]), 'z': r(p[2]), 'yaw': r(attr(pt, 'rot_y', 0))}
+    elif kind == 'goal':
+        level['goal'] = {'x': r(p[0]), 'z': r(p[2])}
+    elif kind == 'collider':
         s = attr(pt, 'size', (1, 1, 1))
         level['colliders'].append({'x': r(p[0]), 'z': r(p[2]), 'w': r(s[0]), 'd': r(s[2]),
                                    'h': r(s[1]), 'rot': r(attr(pt, 'rot_y', 0))})
-    elif kind == 'gem':
-        level['gems'].append([r(p[0]), r(p[2])])
-    elif kind == 'spawn':
-        level['spawn'] = {'x': r(p[0]), 'z': r(p[2]), 'yaw': r(attr(pt, 'rot_y', 0))}
+    else:
+        unknown.add(kind)
+if unknown:
+    print('level export: points with an unknown type were skipped:', sorted(unknown))
 
 os.makedirs(outdir, exist_ok=True)
 with open(os.path.join(outdir, 'level.json'), 'w') as f:

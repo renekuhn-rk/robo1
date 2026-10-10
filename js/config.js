@@ -45,10 +45,29 @@ export const CONFIG = {
     maxBank: 10,          // degrees of sideways tilt into turns
     bankAmount: 3,        // how strongly turns cause banking
 
+    groundFollow: 14,     // how quickly it follows bumps in the ground; lower = floatier
     contactShadow: 0.5,   // darkness of the soft shadow on the floor under the robot; 0 = none
   },
 
+  // Game controller: stick movement smaller than this is ignored, so a
+  // slightly off-centre stick doesn't make the robot creep.
+  gamepadDeadzone: 0.2,
+
+  // Loudness of the sound effects, 0 to 1. 0 turns sound off.
+  soundVolume: 0.5,
+
   pickupRadius: 0.9,
+  goalRadius: 1.2,          // how close the robot must get to the goal
+  treasureUsesKey: true,    // opening a treasure spends one key; false = one key opens them all
+  keyModel: 1,              // 1, 2 or 3: which key from js/props.js (see props.html); 0 = plain yellow gem
+  treasureModel: 1,         // 1, 2 or 3: which chest; 0 = plain purple gem
+  propScale: 1.5,           // size of the key and chest models
+
+  // Levels with a collision mesh ("collision" in level.json).
+  ground: {
+    cell: 0.1,   // size of one cell of the walkable-area map, in game units
+    minUp: 0.5,  // faces tilted further than this from flat count as walls, not floor (1 = flat, 0 = vertical)
+  },
 
   // Stand-in visuals for levels that have no GLB yet.
   blockout: {
@@ -72,6 +91,9 @@ export const CONFIG = {
     wall: 0x4f6fd1,
     base: 0x34488f,
     gem: 0xff4f8b,
+    key: 0xffd23c,
+    treasure: 0x9b5cff,
+    goal: 0x5cff9b,
     orange: 0xf5a54a,
     yellow: 0xffd35c,
     blue: 0x6f8de0,

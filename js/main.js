@@ -6,10 +6,11 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { CONFIG } from './config.js';
 import { Joystick } from './joystick.js';
 import { loadLevel, collide } from './level.js';
+import { makeKey, makeChest, setChestOpen } from './props.js';
+import { play } from './sound.js';
 
 const DEG = Math.PI / 180;
 const R = CONFIG.robot;
-const C = CONFIG.camera;
 const COL = CONFIG.colors;
 const params = new URLSearchParams(location.search);
 const DEBUG = params.has('debug');
@@ -41,38 +42,6 @@ scene.environmentIntensity = 0.3;
 
 scene.add(new THREE.HemisphereLight(0xffffff, 0x6f9c90, 0.8));
 
-const camera = new THREE.PerspectiveCamera(C.fov, CONFIG.stageAspect, 0.1, 200);
-
-// The camera keeps a fixed three-quarter angle and follows the robot.
-// `view` is how far the screen reaches across the floor from the look-at point.
-const camEl = C.elevation * DEG;
-const halfFov = (C.fov / 2) * DEG;
-const camDir = new THREE.Vector3(0, Math.sin(camEl), Math.cos(camEl));
-const view = {
-  halfX: C.distance * Math.tan(halfFov) * CONFIG.stageAspect,
-  far: (C.distance * Math.sin(halfFov)) / Math.sin(camEl - halfFov),   // toward the top of the screen
-  near: (C.distance * Math.sin(halfFov)) / Math.sin(camEl + halfFov),  // toward the bottom
-};
-
-// The sun's shadow area covers what the camera sees and moves along with it.
-const sunOffset = new THREE.Vector3(-6, 14, 7);
-const sun = new THREE.DirectionalLight(0xfff3e0, 2.3);
-sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
-const farHalfX = (C.distance + view.far * Math.cos(camEl)) * Math.tan(halfFov) * CONFIG.stageAspect;
-const shadowHalf = Math.max(farHalfX, (view.far + view.near) / 2) + 1.5;
-Object.assign(sun.shadow.camera, { left: -shadowHalf, right: shadowHalf, top: shadowHalf, bottom: -shadowHalf, near: 1, far: 60 });
-sun.shadow.bias = -0.0004;
-sun.shadow.normalBias = 0.02;
-scene.add(sun, sun.target);
-const sunRot = new THREE.Matrix4();
-const sunRotInv = new THREE.Matrix4();
-function aimSun() {
-  sunRot.lookAt(sunOffset, new THREE.Vector3(), new THREE.Vector3(0, 1, 0));
-  sunRotInv.copy(sunRot).invert();
-}
-aimSun();
-
 // ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------
@@ -99,6 +68,27 @@ addEventListener('keydown', (e) => { if (KEYMAP[e.code]) { keys.add(KEYMAP[e.cod
 addEventListener('keyup', (e) => keys.delete(KEYMAP[e.code]));
 addEventListener('blur', () => keys.clear());
 
+// Game controller (Xbox and similar): left stick or d-pad to drive, A to
+// confirm. Returns null when no controller is connected.
+function readGamepad() {
+  for (const pad of navigator.getGamepads?.() ?? []) {
+    if (!pad?.connected) continue;
+    const b = pad.buttons;
+    let x = pad.axes[0] ?? 0;
+    let y = pad.axes[1] ?? 0;
+    if (b[14]?.pressed) x = -1;
+    if (b[15]?.pressed) x = 1;
+    if (b[12]?.pressed) y = -1;
+    if (b[13]?.pressed) y = 1;
+    // Full range starts at the edge of the dead zone and is capped at 1.
+    const len = Math.hypot(x, y);
+    const dead = CONFIG.gamepadDeadzone;
+    const mag = len > dead ? Math.min(1, (len - dead) / (1 - dead)) : 0;
+    return { x: mag ? (x / len) * mag : 0, y: mag ? (y / len) * mag : 0, confirm: !!b[0]?.pressed };
+  }
+  return null;
+}
+
 function readInput() {
   const kx = (keys.has('right') ? 1 : 0) - (keys.has('left') ? 1 : 0);
   const ky = (keys.has('down') ? 1 : 0) - (keys.has('up') ? 1 : 0);
@@ -106,6 +96,8 @@ function readInput() {
     const l = Math.hypot(kx, ky);
     return { x: kx / l, y: ky / l };
   }
+  const pad = readGamepad();
+  if (pad && (pad.x || pad.y)) return pad;
   return { x: joystick.x, y: joystick.y };
 }
 
@@ -175,13 +167,51 @@ if (level.splat) {
   layout();
 }
 
+// Ground height under a point: from the collision mesh, or flat.
+const groundY = (x, z, flat = 0) => (level.ground ? level.ground.heightAt(x, z) : flat);
+
+// ---------------------------------------------------------------------------
+// Camera and sun (a level can override the camera settings)
+// ---------------------------------------------------------------------------
+
+const C = { ...CONFIG.camera, ...level.camera };
+const camera = new THREE.PerspectiveCamera(C.fov, CONFIG.stageAspect, 0.1, 300);
+
+// The camera keeps a fixed three-quarter angle and follows the robot.
+// `view` is how far the screen reaches across the floor from the look-at point.
+const camEl = C.elevation * DEG;
+const halfFov = (C.fov / 2) * DEG;
+const camDir = new THREE.Vector3(0, Math.sin(camEl), Math.cos(camEl));
+const view = {
+  halfX: C.distance * Math.tan(halfFov) * CONFIG.stageAspect,
+  far: (C.distance * Math.sin(halfFov)) / Math.sin(camEl - halfFov),   // toward the top of the screen
+  near: (C.distance * Math.sin(halfFov)) / Math.sin(camEl + halfFov),  // toward the bottom
+};
+
+// The sun's shadow area covers what the camera sees and moves along with it.
 // A level can point the sun where its baked lighting has it.
-if (level.sun) {
-  sunOffset.fromArray(level.sun).setLength(17);
-  aimSun();
-}
+const farHalfX = (C.distance + view.far * Math.cos(camEl)) * Math.tan(halfFov) * CONFIG.stageAspect;
+const shadowHalf = Math.max(farHalfX, (view.far + view.near) / 2) + 1.5;
+const sunDistance = Math.max(17, shadowHalf * 1.5);
+const sunOffset = new THREE.Vector3(-6, 14, 7);
+if (level.sun) sunOffset.fromArray(level.sun);
+sunOffset.setLength(sunDistance);
+const sun = new THREE.DirectionalLight(0xfff3e0, 2.3);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -shadowHalf, right: shadowHalf, top: shadowHalf, bottom: -shadowHalf, near: 1, far: Math.max(60, sunDistance * 3) });
+sun.shadow.bias = -0.0004;
+sun.shadow.normalBias = 0.02;
+scene.add(sun, sun.target);
+const sunRot = new THREE.Matrix4().lookAt(sunOffset, new THREE.Vector3(), new THREE.Vector3(0, 1, 0));
+const sunRotInv = sunRot.clone().invert();
 
 if (DEBUG) {
+  if (level.collisionMesh) {
+    const wire = new THREE.MeshBasicMaterial({ color: 0xff0055, wireframe: true });
+    level.collisionMesh.traverse((o) => { if (o.isMesh) o.material = wire; });
+    scene.add(level.collisionMesh);
+  }
   for (const c of level.colliders) {
     const helper = new THREE.Mesh(
       new THREE.BoxGeometry(c.hw * 2, c.h, c.hd * 2),
@@ -309,7 +339,7 @@ function makePlaceholderRobot() {
 installModel(makePlaceholderRobot());
 
 function resetRobot() {
-  robot.root.position.set(level.spawn.x, 0, level.spawn.z);
+  robot.root.position.set(level.spawn.x, groundY(level.spawn.x, level.spawn.z), level.spawn.z);
   robot.vel.set(0, 0);
   robot.yaw = robot.targetYaw = level.spawn.yaw * DEG;
   robot.root.rotation.y = robot.yaw;
@@ -333,6 +363,7 @@ function updateCamera(dt, snap = false) {
   const gz = range(b.minZ - C.edgePad + view.far, b.maxZ + C.edgePad - view.near, p.z);
   const k = snap ? 1 : damp(C.followSpeed, dt);
   camTarget.x += (gx - camTarget.x) * k;
+  camTarget.y += (p.y - camTarget.y) * k;
   camTarget.z += (gz - camTarget.z) * k;
   camera.position.copy(camTarget).addScaledVector(camDir, C.distance);
   camera.lookAt(camTarget);
@@ -340,7 +371,7 @@ function updateCamera(dt, snap = false) {
   // Centre the shadow area on the visible floor, snapped to whole shadow
   // texels so shadow edges don't shimmer while the camera moves.
   const texel = (shadowHalf * 2) / sun.shadow.mapSize.x;
-  sunCenter.set(camTarget.x, 0, camTarget.z + (view.near - view.far) / 2).applyMatrix4(sunRotInv);
+  sunCenter.set(camTarget.x, camTarget.y, camTarget.z + (view.near - view.far) / 2).applyMatrix4(sunRotInv);
   sunCenter.x = Math.round(sunCenter.x / texel) * texel;
   sunCenter.y = Math.round(sunCenter.y / texel) * texel;
   sunCenter.applyMatrix4(sunRot);
@@ -366,67 +397,136 @@ gltfLoader.load(
 );
 
 // ---------------------------------------------------------------------------
-// Pickups
+// Pickups and goal
 // ---------------------------------------------------------------------------
 
+// Keys and chests come from props.js; without a model a kind falls back to
+// a gem in its colour. Gems and keys float and spin, chests sit on the floor.
 const gemGeo = new THREE.OctahedronGeometry(0.3, 0);
-const gemMat = new THREE.MeshStandardMaterial({
-  color: COL.gem, emissive: COL.gem, emissiveIntensity: 0.35, roughness: 0.25, flatShading: true,
-});
 const burstGeo = new THREE.RingGeometry(0.5, 0.62, 40);
+const KINDS = {
+  gem: { list: level.gems, color: COL.gem, size: 1 },
+  key: { list: level.keys, color: COL.key, size: 1, make: () => makeKey(CONFIG.keyModel) },
+  treasure: { list: level.treasures, color: COL.treasure, size: 1.5, reach: 0.5, make: () => makeChest(CONFIG.treasureModel) },
+};
 
-const pickups = level.gems.map(({ x, z, y = 0 }, i) => {
-  const mesh = new THREE.Mesh(gemGeo, gemMat);
-  mesh.castShadow = true;
-  mesh.position.set(x, y + 0.95, z);
-  scene.add(mesh);
-  return { mesh, x, z, baseY: y + 0.95, phase: i * 0.8, taken: false };
-});
+const pickups = [];
+for (const [kind, { list, color, size, reach = 0, make }] of Object.entries(KINDS)) {
+  const mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.35, roughness: 0.25, flatShading: true });
+  list.forEach(({ x, z, y = 0 }) => {
+    const model = make?.();
+    const mesh = model ?? new THREE.Mesh(gemGeo, mat);
+    const floats = !(model && kind === 'treasure');
+    if (!model) mesh.castShadow = true;
+    mesh.scale.setScalar(model ? CONFIG.propScale : size);
+    const baseY = groundY(x, z, y) + (floats ? 0.95 : 0);
+    mesh.position.set(x, baseY, z);
+    scene.add(mesh);
+    // A chest is wide, so it reacts from a little further away.
+    const radius = CONFIG.pickupRadius + (model ? reach : 0);
+    pickups.push({ kind, mesh, x, z, baseY, floats, radius, phase: pickups.length * 0.8, taken: false, hintAt: 0 });
+  });
+}
 const effects = [];
 
-let collected = 0;
+// Reaching the goal ends the level; without one, collecting every gem does.
+let goalMesh = null;
+if (level.goal) {
+  const { x, z } = level.goal;
+  goalMesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(CONFIG.goalRadius * 0.8, CONFIG.goalRadius * 0.8, 2.4, 40, 1, true),
+    new THREE.MeshBasicMaterial({ color: COL.goal, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending })
+  );
+  goalMesh.position.set(x, groundY(x, z) + 1.2, z);
+  scene.add(goalMesh);
+}
+
+const have = { gem: 0, key: 0, treasure: 0 }; // keys: in hand; gems and treasures: found
+let keysFound = 0; // keys picked up so far, spent or not
 let startTime = performance.now();
 let won = false;
-const countEl = $('count');
 const counterEl = $('counter');
-$('total').textContent = pickups.length;
+const keysEl = $('keys');
+const chestsEl = $('chests');
+counterEl.hidden = !level.gems.length;
+keysEl.hidden = !level.keys.length;
+chestsEl.hidden = !level.treasures.length;
+$('total').textContent = level.gems.length;
+$('key-total').textContent = level.keys.length;
+
+function showCounts(bumped) {
+  $('count').textContent = have.gem;
+  $('key-count').textContent = keysFound;
+  $('chest-count').textContent = have.treasure;
+  if (!bumped) return;
+  bumped.classList.remove('bump');
+  void bumped.offsetWidth; // restart the CSS animation
+  bumped.classList.add('bump');
+}
 
 function collect(p) {
+  // A treasure stays shut without a key.
+  if (p.kind === 'treasure') {
+    if (!have.key) {
+      const now = performance.now();
+      if (now > p.hintAt) {
+        p.hintAt = now + 3000;
+        showToast('You need a key to open this treasure.', 2500);
+        play('locked');
+      }
+      return;
+    }
+    if (CONFIG.treasureUsesKey) have.key--;
+  }
   p.taken = true;
-  p.mesh.visible = false;
-  collected++;
-  countEl.textContent = collected;
-  counterEl.classList.remove('bump');
-  void counterEl.offsetWidth; // restart the CSS animation
-  counterEl.classList.add('bump');
+  if (p.floats) p.mesh.visible = false;
+  else p.opening = 0; // a chest stays and swings open
+  have[p.kind]++;
+  if (p.kind === 'key') keysFound++;
+  play(p.kind === 'treasure' ? 'chest' : p.kind);
+  showCounts({ gem: counterEl, key: keysEl, treasure: chestsEl }[p.kind]);
 
   const ring = new THREE.Mesh(
     burstGeo,
-    new THREE.MeshBasicMaterial({ color: COL.gem, transparent: true, depthWrite: false, side: THREE.DoubleSide })
+    new THREE.MeshBasicMaterial({ color: KINDS[p.kind].color, transparent: true, depthWrite: false, side: THREE.DoubleSide })
   );
   ring.position.copy(p.mesh.position);
+  if (!p.floats) ring.position.y += 0.5;
   ring.lookAt(camera.position);
   scene.add(ring);
   effects.push({ mesh: ring, age: 0, life: 0.45 });
 
-  if (collected === pickups.length) {
-    won = true;
-    const secs = ((performance.now() - startTime) / 1000).toFixed(1);
-    setTimeout(() => {
-      $('win-time').textContent = `${pickups.length} gems in ${secs} seconds`;
-      $('win').hidden = false;
-      $('again').focus();
-    }, 500);
-  }
+  if (!level.goal && level.gems.length && have.gem === level.gems.length) win();
+}
+
+function win() {
+  won = true;
+  play('goal');
+  const secs = ((performance.now() - startTime) / 1000).toFixed(1);
+  const treasures = level.treasures.length;
+  setTimeout(() => {
+    if (level.goal) {
+      $('win-title').textContent = 'Goal reached';
+      $('win-time').textContent = treasures
+        ? `${have.treasure} of ${treasures} treasures found, in ${secs} seconds`
+        : `in ${secs} seconds`;
+    } else {
+      $('win-title').textContent = 'All gems collected';
+      $('win-time').textContent = `${level.gems.length} gems in ${secs} seconds`;
+    }
+    $('win').hidden = false;
+    $('again').focus();
+  }, 500);
 }
 
 $('again').addEventListener('click', () => {
   for (const p of pickups) {
     p.taken = false;
     p.mesh.visible = true;
+    if (!p.floats) setChestOpen(p.mesh, 0);
   }
-  collected = 0;
-  countEl.textContent = 0;
+  have.gem = have.key = have.treasure = keysFound = 0;
+  showCounts();
   won = false;
   startTime = performance.now();
   resetRobot();
@@ -451,6 +551,7 @@ function updateRobot(dt) {
   const [px, pz] = collide(robot.root.position.x + v.x * dt, robot.root.position.z + v.y * dt, R.radius, v, level);
   robot.root.position.x = px;
   robot.root.position.z = pz;
+  robot.root.position.y += (groundY(px, pz) - robot.root.position.y) * damp(R.groundFollow, dt);
 
   // Face the stick direction; keep the last heading when stopped.
   if (mag > 0.15) robot.targetYaw = Math.atan2(input.x, input.y);
@@ -494,10 +595,24 @@ function updateRobot(dt) {
 function updatePickups(dt, t) {
   const { x, z } = robot.root.position;
   for (const p of pickups) {
-    if (p.taken) continue;
-    p.mesh.rotation.y = t * 1.6 + p.phase;
-    p.mesh.position.y = p.baseY + Math.sin(t * 2.4 + p.phase) * 0.1;
-    if (Math.hypot(p.x - x, p.z - z) < CONFIG.pickupRadius) collect(p);
+    if (p.taken) {
+      // Lid swings back, a little past open, then settles.
+      if (p.opening < 1) {
+        p.opening = Math.min(1, p.opening + dt * 2.2);
+        const u = p.opening - 1;
+        setChestOpen(p.mesh, 1 + 2.70158 * u * u * u + 1.70158 * u * u);
+      }
+      continue;
+    }
+    if (p.floats) {
+      p.mesh.rotation.y = t * 1.6 + p.phase;
+      p.mesh.position.y = p.baseY + Math.sin(t * 2.4 + p.phase) * 0.1;
+    }
+    if (!won && Math.hypot(p.x - x, p.z - z) < p.radius) collect(p);
+  }
+  if (goalMesh) {
+    goalMesh.material.opacity = 0.3 + 0.12 * Math.sin(t * 3);
+    if (!won && Math.hypot(level.goal.x - x, level.goal.z - z) < CONFIG.goalRadius) win();
   }
   for (let i = effects.length - 1; i >= 0; i--) {
     const e = effects[i];
@@ -516,18 +631,27 @@ function updatePickups(dt, t) {
 const debugEl = $('debug');
 if (DEBUG) debugEl.hidden = false;
 
+// A on the controller presses "Play again" once the result panel is up.
+let confirmHeld = false;
+function updateGamepadConfirm() {
+  const confirm = readGamepad()?.confirm ?? false;
+  if (confirm && !confirmHeld && !$('win').hidden) $('again').click();
+  confirmHeld = confirm;
+}
+
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = clock.elapsedTime;
   if (dt <= 0) return; // first frame can have zero elapsed time
+  updateGamepadConfirm();
   updateRobot(dt);
   updateCamera(dt);
   updatePickups(dt, t);
   if (DEBUG) {
     const p = robot.root.position;
     const splats = level.splat ? `\n${level.splat.numSplats.toLocaleString()} splats` : '';
-    debugEl.textContent = `x ${p.x.toFixed(2)}  z ${p.z.toFixed(2)}\n${Math.round(1 / Math.max(dt, 1e-3))} fps${splats}`;
+    debugEl.textContent = `x ${p.x.toFixed(2)}  y ${p.y.toFixed(2)}  z ${p.z.toFixed(2)}\n${Math.round(1 / Math.max(dt, 1e-3))} fps${splats}`;
   }
   renderer.render(scene, camera);
 });

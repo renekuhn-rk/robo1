@@ -31,9 +31,41 @@
     </div>
 
     <div id="hud">
-      <div id="counter" role="status" aria-live="polite">
-        <span class="gem-icon" aria-hidden="true"></span>
-        <span id="count">0</span><span class="total">/ <span id="total">0</span></span>
+      <div id="counters">
+        <div id="counter" class="pill" role="status" aria-live="polite">
+          <span class="gem-icon" aria-hidden="true"></span>
+          <span id="count">0</span><span class="total">/ <span id="total">0</span></span>
+        </div>
+        <div id="keys" class="pill" role="status" aria-live="polite" aria-label="Keys found" hidden>
+          <svg class="icon" viewBox="-3 -3 36 36" aria-hidden="true">
+            <defs>
+              <g id="key-shape">
+                <circle cx="9" cy="15" r="6"/>
+                <rect x="13" y="13" width="14" height="4"/>
+                <rect x="19" y="16" width="3" height="6"/>
+                <rect x="24" y="16" width="3" height="5"/>
+              </g>
+            </defs>
+            <g transform="rotate(-45 15 15)">
+              <use href="#key-shape" fill="#22305c" stroke="#22305c" stroke-width="5" stroke-linejoin="round"/>
+              <use href="#key-shape" fill="#ffd23c"/>
+              <circle cx="9" cy="15" r="2.2" fill="#22305c"/>
+            </g>
+          </svg>
+          <span id="key-count">0</span><span class="total">/ <span id="key-total">0</span></span>
+        </div>
+        <div id="chests" class="pill" role="status" aria-live="polite" aria-label="Chests opened" hidden>
+          <svg class="icon" viewBox="0 0 30 30" aria-hidden="true">
+            <defs>
+              <path id="chest-shape" d="M4 25 V13 Q4 6 11 6 H19 Q26 6 26 13 V25 Z"/>
+            </defs>
+            <use href="#chest-shape" fill="#22305c" stroke="#22305c" stroke-width="5" stroke-linejoin="round"/>
+            <use href="#chest-shape" fill="#9a5b2e"/>
+            <rect x="4" y="13" width="22" height="3" fill="#22305c"/>
+            <rect x="12.5" y="11.5" width="5" height="7" rx="1" fill="#ffd23c" stroke="#22305c" stroke-width="1.5"/>
+          </svg>
+          <span id="chest-count">0</span>
+        </div>
       </div>
       <button id="fullscreen" type="button" aria-label="Toggle fullscreen">
         <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
@@ -47,7 +79,7 @@
 
     <div id="win" hidden>
       <div class="panel">
-        <p class="win-title">All gems collected</p>
+        <p class="win-title" id="win-title">All gems collected</p>
         <p class="win-sub" id="win-time"></p>
         <button id="again" type="button">Play again</button>
       </div>

@@ -3,6 +3,7 @@
   --sky: #bde4ee;
   --paper: #ffffff;
   --gem: #ff4f8b;
+  --key: #ffd23c;
   --blue: #4f6fd1;
   --stick-size: 150px;
   --knob-size: 64px;
@@ -50,10 +51,15 @@ html, body {
   pointer-events: none;
 }
 
-#counter {
+#counters {
   position: absolute;
   top: 18px;
   left: 18px;
+  display: flex;
+  gap: 12px;
+}
+
+.pill {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -68,10 +74,18 @@ html, body {
   line-height: 1;
 }
 
-#counter .total {
+.pill .total {
   font-weight: 600;
   font-size: 22px;
   opacity: 0.6;
+}
+
+.pill[hidden] { display: none; }
+
+.pill .icon {
+  width: 34px;
+  height: 34px;
+  margin: -6px 0 0 -6px;
 }
 
 .gem-icon {
@@ -84,7 +98,7 @@ html, body {
   transform: rotate(45deg);
 }
 
-#counter.bump { animation: bump 0.32s ease-out; }
+.pill.bump { animation: bump 0.32s ease-out; }
 
 @keyframes bump {
   0%   { transform: scale(1); }
@@ -272,5 +286,5 @@ button:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  #counter.bump, #win .panel { animation: none; }
+  .pill.bump, #win .panel { animation: none; }
 }
